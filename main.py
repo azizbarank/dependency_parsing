@@ -1,8 +1,22 @@
 import sys
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import DataLoader
 import torch
+import torch.nn as nn
+
+
+class DependencyParser(nn.Module):
+    def __init__(self, encoder_name="roberta-base"):
+        super().__init__()
+        self.encoder = AutoModel.from_pretrained(encoder_name)
+        self.hidden_size = self.encoder.config.hidden_size  # 768 for roberta-base
+
+    def forward(self, input_ids, attention_mask):
+        # Step 1: Get encoder outputs
+        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden_size)
+        return hidden_states
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-base", add_prefix_space=True)
 dataset = load_dataset("universal_dependencies", "en_ewt", trust_remote_code=True)
