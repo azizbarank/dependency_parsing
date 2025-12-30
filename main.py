@@ -7,10 +7,23 @@ import torch.nn as nn
 
 
 class DependencyParser(nn.Module):
-    def __init__(self, encoder_name="roberta-base"):
+    def __init__(self, encoder_name="roberta-base", mlp_dim=500):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(encoder_name)
         self.hidden_size = self.encoder.config.hidden_size  # 768 for roberta-base
+        self.mlp_dim = mlp_dim
+
+        # MLP for head representations
+        self.mlp_head = nn.Sequential(
+            nn.Linear(self.hidden_size, mlp_dim),
+            nn.ReLU()
+        )
+
+        # MLP for dependent representations
+        self.mlp_dep = nn.Sequential(
+            nn.Linear(self.hidden_size, mlp_dim),
+            nn.ReLU()
+        )
 
     def forward(self, input_ids, attention_mask):
         # Step 1: Get encoder outputs
