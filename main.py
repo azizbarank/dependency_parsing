@@ -32,10 +32,21 @@ class DependencyParser(nn.Module):
         nn.init.zeros_(self.u2)
 
     def forward(self, input_ids, attention_mask):
-        # Step 1: Get encoder outputs
+        # Step 5: Get RoBERTa embeddings
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden_size)
-        return hidden_states
+
+        # Step 6: Apply MLPs to get H_head and H_dep
+        H_head = self.mlp_head(hidden_states)  # (batch, seq_len, mlp_dim)
+        H_dep = self.mlp_dep(hidden_states)    # (batch, seq_len, mlp_dim)
+
+        # Step 7: Compute biaffine scores (vectorized)
+        # score(i,j) = H_head[i].T @ U1 @ H_dep[j] + H_head[i].T @ u2
+        bilinear = torch.einsum('bid,de,bje->bij', H_head, self.U1, H_dep)
+        linear = torch.einsum('bid,d->bi', H_head, self.u2)
+        scores = bilinear + linear.unsqueeze(2)  # (batch, seq_len, seq_len)
+
+        return scores
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-base", add_prefix_space=True)
 dataset = load_dataset("universal_dependencies", "en_ewt", trust_remote_code=True)
