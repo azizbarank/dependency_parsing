@@ -25,6 +25,12 @@ class DependencyParser(nn.Module):
             nn.ReLU()
         )
 
+        # Biaffine attention parameters
+        self.U1 = nn.Parameter(torch.empty(mlp_dim, mlp_dim))
+        self.u2 = nn.Parameter(torch.empty(mlp_dim))
+        nn.init.xavier_uniform_(self.U1)
+        nn.init.zeros_(self.u2)
+
     def forward(self, input_ids, attention_mask):
         # Step 1: Get encoder outputs
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
