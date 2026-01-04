@@ -31,7 +31,7 @@ class DependencyParser(nn.Module):
         nn.init.xavier_uniform_(self.U1)
         nn.init.zeros_(self.u2)
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask, head=None):
         # Step 5: Get RoBERTa embeddings
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden_size)
@@ -46,7 +46,13 @@ class DependencyParser(nn.Module):
         linear = torch.einsum('bid,d->bi', H_head, self.u2)
         scores = bilinear + linear.unsqueeze(2)  # (batch, seq_len, seq_len)
 
-        return scores
+        # Step 8: Compute loss if labels provided
+        loss = None
+        if head is not None:
+            loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fn(scores, head)
+
+        return scores, loss
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-base", add_prefix_space=True)
 dataset = load_dataset("universal_dependencies", "en_ewt", trust_remote_code=True)
