@@ -4,6 +4,8 @@ from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
+import wandb
+from tqdm import tqdm
 
 
 class DependencyParser(nn.Module):
@@ -178,6 +180,68 @@ def collate_fn(batch):
     }
 
 
+def compute_head_accuracy(model, dataloader, device):
+    """Compute head tagging accuracy, ignoring tokens with head=-100."""
+    model.eval()
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            heads = batch["head"].to(device)
+
+            scores, _ = model(input_ids, attention_mask)
+            predictions = scores.argmax(dim=1)  # (batch, seq_len)
+
+            mask = heads != -100
+            correct += (predictions[mask] == heads[mask]).sum().item()
+            total += mask.sum().item()
+
+    model.train()
+    return correct / total if total > 0 else 0.0
+
+
+def train(model, train_loader, dev_loader, device, num_epochs=10, lr=2e-5):
+    """Training loop with wandb logging and head accuracy evaluation."""
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    model.to(device)
+    model.train()
+
+    for epoch in range(num_epochs):
+        total_loss = 0
+        num_batches = 0
+
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        for batch in progress_bar:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            heads = batch["head"].to(device)
+
+            optimizer.zero_grad()
+            scores, loss = model(input_ids, attention_mask, heads)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            num_batches += 1
+            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+        avg_loss = total_loss / num_batches
+        head_acc = compute_head_accuracy(model, dev_loader, device)
+
+        wandb.log({
+            "epoch": epoch + 1,
+            "train_loss": avg_loss,
+            "head_accuracy": head_acc
+        })
+
+        print(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, Head Accuracy={head_acc:.4f}")
+
+    return model
+
+
 def main():
     print(f"Deprels: {len(deprel_to_id)}, Train: {len(dataset['train'])}, Dev: {len(dataset['validation'])}")
 
@@ -192,19 +256,35 @@ def main():
         remove_columns=dataset["validation"].column_names,
     )
 
-    print("\nFirst 10 training sentences:")
-    print("=" * 60)
-    for i in range(10):
-        print(f"\n--- Sentence {i + 1} ---")
-        visualize_sentence(train_tokenized, i)
-
     train_loader = DataLoader(train_tokenized, batch_size=32, shuffle=True, collate_fn=collate_fn)
     dev_loader = DataLoader(dev_tokenized, batch_size=32, shuffle=False, collate_fn=collate_fn)
 
     print(f"Train batches: {len(train_loader)}, Dev batches: {len(dev_loader)}")
 
-    batch = next(iter(train_loader))
-    print(f"Batch input_ids shape: {batch['input_ids'].shape}")
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Initialize model
+    model = DependencyParser()
+
+    # Initialize wandb
+    wandb.init(project="dependency-parsing", config={
+        "learning_rate": 2e-5,
+        "epochs": 10,
+        "batch_size": 32,
+        "mlp_dim": 500,
+        "encoder": "roberta-base"
+    })
+
+    # Train
+    model = train(model, train_loader, dev_loader, device, num_epochs=10, lr=2e-5)
+
+    # Final evaluation
+    final_acc = compute_head_accuracy(model, dev_loader, device)
+    print(f"\nFinal Head Tagging Accuracy: {final_acc:.4f}")
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
