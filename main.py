@@ -4,8 +4,10 @@ from transformers import AutoTokenizer, AutoModel
 from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import wandb
 from tqdm import tqdm
+import networkx as nx
 
 
 class DependencyParser(nn.Module):
@@ -203,6 +205,47 @@ def compute_head_accuracy(model, dataloader, device):
     return correct / total if total > 0 else 0.0
 
 
+def mst_decode(scores, word_pos, n_words):
+    """Decode best tree using Chu-Liu-Edmonds. Returns list of head word indices."""
+    G = nx.DiGraph()
+    for dep in range(1, n_words):
+        for head in range(n_words):
+            if head != dep:
+                G.add_edge(head, dep, weight=scores[word_pos[head], word_pos[dep]].item())
+
+    try:
+        mst = nx.maximum_spanning_arborescence(G, attr='weight')
+        heads = {dep: head for head, dep in mst.edges()}
+        return [heads.get(i, 0) for i in range(n_words)]
+    except nx.NetworkXException:
+        return [scores[word_pos[:n_words], word_pos[i]].argmax().item() for i in range(n_words)]
+
+
+def compute_uas(model, dataloader, device):
+    """Compute UAS using MST decoding."""
+    model.eval()
+    correct = total = 0
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Computing UAS"):
+            scores, _ = model(batch["input_ids"].to(device), batch["attention_mask"].to(device))
+            log_probs = F.log_softmax(scores, dim=1).cpu()
+
+            for b in range(scores.size(0)):
+                n = batch["num_words"][b].item()
+                wp = batch["tokens_representing_words"][b][:n].tolist()
+                preds = mst_decode(log_probs[b], wp, n)
+
+                for w in range(1, n):
+                    gold_head_tok = batch["head"][b, wp[w]].item()
+                    gold_head_word = next((i for i, p in enumerate(wp) if p == gold_head_tok), 0)
+                    correct += (preds[w] == gold_head_word)
+                    total += 1
+
+    model.train()
+    return correct / total if total > 0 else 0.0
+
+
 def train(model, train_loader, dev_loader, device, num_epochs=10, lr=2e-5):
     """Training loop with wandb logging and head accuracy evaluation."""
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -268,8 +311,8 @@ def main():
     # Initialize model
     model = DependencyParser()
 
-    # Initialize wandb
-    wandb.init(project="dependency-parsing", config={
+    # Initialize wandb (offline mode - no login required)
+    wandb.init(project="dependency-parsing", mode="offline", config={
         "learning_rate": 2e-5,
         "epochs": 10,
         "batch_size": 32,
@@ -283,6 +326,10 @@ def main():
     # Final evaluation
     final_acc = compute_head_accuracy(model, dev_loader, device)
     print(f"\nFinal Head Tagging Accuracy: {final_acc:.4f}")
+
+    # UAS with MST decoding
+    uas = compute_uas(model, dev_loader, device)
+    print(f"UAS (MST): {uas:.4f}")
 
     wandb.finish()
 
