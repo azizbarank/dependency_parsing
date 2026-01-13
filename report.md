@@ -71,6 +71,10 @@ Two evaluation metrics implemented:
 | 9 | 0.0649 | 93.20% |
 | 10 | 0.0533 | 93.43% |
 
+### Learning Curves
+
+![Learning Curves](learning_curves.png)
+
 ## Discussion
 
 ### Why Biaffine Attention?
